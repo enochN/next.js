@@ -1,10 +1,14 @@
-# Example app with Jest tests
+# Next.js + Jest
 
-## How to use
+This example shows how to configure Jest to work with Next.js.
 
-### Using `create-next-app`
+This includes Next.js' built-in support for Global CSS, CSS Modules, and TypeScript!
 
-Execute [`create-next-app`](https://github.com/segmentio/create-next-app) with [Yarn](https://yarnpkg.com/lang/en/docs/cli/create/) or [npx](https://github.com/zkat/npx#readme) to bootstrap the example:
+## How to Use
+
+Quickly get started using [Create Next App](https://github.com/vercel/next.js/tree/canary/packages/create-next-app#readme)!
+
+In your terminal, run the following command:
 
 ```bash
 npx create-next-app --example with-jest with-jest-app
@@ -12,35 +16,8 @@ npx create-next-app --example with-jest with-jest-app
 yarn create next-app --example with-jest with-jest-app
 ```
 
-### Download manually
-
-Download the example:
+## Run Jest Tests
 
 ```bash
-curl https://codeload.github.com/zeit/next.js/tar.gz/canary | tar -xz --strip=2 next.js-canary/examples/with-jest
-cd with-jest
+npm test
 ```
-
-Install it and run:
-
-```bash
-npm install
-npm run dev
-# or
-yarn
-yarn dev
-```
-
-## Run Jest tests
-
-```bash
-npm run test
-# or
-yarn test
-```
-
-## The idea behind the example
-
-This example features:
-
-- An app with jest tests

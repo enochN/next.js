@@ -1,20 +1,11 @@
-import fs from 'fs'
-import { promisify } from 'util'
+import { promises } from 'fs'
 import { join } from 'path'
-import { BUILD_ID_FILE, HEAD_BUILD_ID_FILE } from 'next-server/constants'
-
-const writeFile = promisify(fs.writeFile)
+import { BUILD_ID_FILE } from '../next-server/lib/constants'
 
 export async function writeBuildId(
   distDir: string,
-  buildId: string,
-  headBuildId: boolean
+  buildId: string
 ): Promise<void> {
   const buildIdPath = join(distDir, BUILD_ID_FILE)
-  await writeFile(buildIdPath, buildId, 'utf8')
-
-  if (headBuildId) {
-    const headBuildIdPath = join(distDir, HEAD_BUILD_ID_FILE)
-    await writeFile(headBuildIdPath, buildId, 'utf8')
-  }
+  await promises.writeFile(buildIdPath, buildId, 'utf8')
 }

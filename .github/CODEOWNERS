@@ -1,8 +1,6 @@
 # Learn how to add code owners here:
 # https://help.github.com/en/articles/about-code-owners
 
-/packages/                @timneutkens @Timer @ijjk @lfades
-/examples/                @lfades
-/test/                    @timneutkens @Timer @ijjk @lfades
-/bench/                   @timneutkens
-/errors/                  @Timer
+*          @timneutkens @ijjk @lfades @divmain @shuding
+/docs/     @timneutkens @ijjk @lfades @divmain @shuding @leerob
+/examples/ @timneutkens @ijjk @lfades @divmain @shuding @leerob

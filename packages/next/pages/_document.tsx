@@ -1,18 +1,25 @@
-/* eslint-disable */
 import PropTypes from 'prop-types'
-import React, { Component } from 'react'
-import { cleanAmpPath } from 'next-server/dist/server/utils'
+import React, { Component, ReactElement, ReactNode, useContext } from 'react'
+import flush from 'styled-jsx/server'
+import {
+  AMP_RENDER_TARGET,
+  OPTIMIZED_FONT_PROVIDERS,
+} from '../next-server/lib/constants'
+import { DocumentContext as DocumentComponentContext } from '../next-server/lib/document-context'
 import {
   DocumentContext,
   DocumentInitialProps,
   DocumentProps,
-} from 'next-server/dist/lib/utils'
-import { htmlEscapeJsonString } from '../server/htmlescape'
-import flush from 'styled-jsx/server'
+} from '../next-server/lib/utils'
 import {
-  CLIENT_STATIC_FILES_RUNTIME_AMP,
-  CLIENT_STATIC_FILES_RUNTIME_WEBPACK,
-} from 'next-server/constants'
+  BuildManifest,
+  getPageFiles,
+} from '../next-server/server/get-page-files'
+import { cleanAmpPath } from '../next-server/server/utils'
+import { htmlEscapeJsonString } from '../server/htmlescape'
+import Script, {
+  Props as ScriptLoaderProps,
+} from '../client/experimental-script'
 
 export { DocumentContext, DocumentInitialProps, DocumentProps }
 
@@ -21,16 +28,9 @@ export type OriginProps = {
   crossOrigin?: string
 }
 
-export type DocumentComponentContext = {
-  readonly _documentProps: DocumentProps
-  readonly _devOnlyInvalidateCacheQueryString: string
-}
-
-export async function middleware({ req, res }: DocumentContext) {}
-
-function dedupe(bundles: any[]): any[] {
-  const files = new Set()
-  const kept = []
+function dedupe<T extends { file: string }>(bundles: T[]): T[] {
+  const files = new Set<string>()
+  const kept: T[] = []
 
   for (const bundle of bundles) {
     if (files.has(bundle.file)) continue
@@ -40,11 +40,27 @@ function dedupe(bundles: any[]): any[] {
   return kept
 }
 
-function getOptionalModernScriptVariant(path: string) {
-  if (process.env.__NEXT_MODERN_BUILD) {
-    return path.replace(/\.js$/, '.module.js')
+type DocumentFiles = {
+  sharedFiles: readonly string[]
+  pageFiles: readonly string[]
+  allFiles: readonly string[]
+}
+
+function getDocumentFiles(
+  buildManifest: BuildManifest,
+  pathname: string,
+  inAmpMode: boolean
+): DocumentFiles {
+  const sharedFiles: readonly string[] = getPageFiles(buildManifest, '/_app')
+  const pageFiles: readonly string[] = inAmpMode
+    ? []
+    : getPageFiles(buildManifest, pathname)
+
+  return {
+    sharedFiles,
+    pageFiles,
+    allFiles: [...new Set([...sharedFiles, ...pageFiles])],
   }
-  return path
 }
 
 /**
@@ -52,34 +68,38 @@ function getOptionalModernScriptVariant(path: string) {
  * Commonly used for implementing server side rendering for `css-in-js` libraries.
  */
 export default class Document<P = {}> extends Component<DocumentProps & P> {
-  static childContextTypes = {
-    _documentProps: PropTypes.any,
-    _devOnlyInvalidateCacheQueryString: PropTypes.string,
-  }
+  static headTagsMiddleware = process.env.__NEXT_PLUGINS
+    ? import(
+        // @ts-ignore loader syntax
+        'next-plugin-loader?middleware=document-head-tags-server!'
+      )
+    : () => []
 
   /**
    * `getInitialProps` hook returns the context object with the addition of `renderPage`.
    * `renderPage` callback executes `React` rendering logic synchronously to support server-rendering wrappers
    */
-  static async getInitialProps({
-    renderPage,
-  }: DocumentContext): Promise<DocumentInitialProps> {
-    const { html, head, dataOnly } = await renderPage()
-    const styles = flush()
-    return { html, head, styles, dataOnly }
+  static async getInitialProps(
+    ctx: DocumentContext
+  ): Promise<DocumentInitialProps> {
+    const enhanceApp = (App: any) => {
+      return (props: any) => <App {...props} />
+    }
+
+    const { html, head } = await ctx.renderPage({ enhanceApp })
+    const styles = [...flush()]
+    return { html, head, styles }
   }
 
-  context!: DocumentComponentContext
-
-  getChildContext(): DocumentComponentContext {
-    return {
-      _documentProps: this.props,
-      // In dev we invalidate the cache by appending a timestamp to the resource URL.
-      // This is a workaround to fix https://github.com/zeit/next.js/issues/5860
-      // TODO: remove this workaround when https://bugs.webkit.org/show_bug.cgi?id=187726 is fixed.
-      _devOnlyInvalidateCacheQueryString:
-        process.env.NODE_ENV !== 'production' ? '?ts=' + Date.now() : '',
-    }
+  static renderDocument<P>(
+    DocumentComponent: new () => Document<P>,
+    props: DocumentProps & P
+  ): React.ReactElement {
+    return (
+      <DocumentComponentContext.Provider value={props}>
+        <DocumentComponent {...props} />
+      </DocumentComponentContext.Provider>
+    )
   }
 
   render() {
@@ -95,26 +115,28 @@ export default class Document<P = {}> extends Component<DocumentProps & P> {
   }
 }
 
-export class Html extends Component<
-  React.DetailedHTMLProps<
+export function Html(
+  props: React.DetailedHTMLProps<
     React.HtmlHTMLAttributes<HTMLHtmlElement>,
     HTMLHtmlElement
   >
-> {
-  static contextTypes = {
-    _documentProps: PropTypes.any,
-  }
+) {
+  const { inAmpMode, docComponentsRendered, locale } = useContext(
+    DocumentComponentContext
+  )
 
-  static propTypes = {
-    children: PropTypes.node.isRequired,
-  }
+  docComponentsRendered.Html = true
 
-  context!: DocumentComponentContext
-
-  render() {
-    const { inAmpMode } = this.context._documentProps
-    return <html {...this.props} amp={inAmpMode ? '' : undefined} />
-  }
+  return (
+    <html
+      {...props}
+      lang={props.lang || locale || undefined}
+      amp={inAmpMode ? '' : undefined}
+      data-ampdevmode={
+        inAmpMode && process.env.NODE_ENV !== 'production' ? '' : undefined
+      }
+    />
+  )
 }
 
 export class Head extends Component<
@@ -124,53 +146,101 @@ export class Head extends Component<
       HTMLHeadElement
     >
 > {
-  static contextTypes = {
-    _documentProps: PropTypes.any,
-    _devOnlyInvalidateCacheQueryString: PropTypes.string,
-  }
+  static contextType = DocumentComponentContext
 
   static propTypes = {
     nonce: PropTypes.string,
     crossOrigin: PropTypes.string,
   }
 
-  context!: DocumentComponentContext
+  context!: React.ContextType<typeof DocumentComponentContext>
 
-  getCssLinks() {
-    const { assetPrefix, files } = this.context._documentProps
-    if (!files || files.length === 0) {
-      return null
+  getCssLinks(files: DocumentFiles): JSX.Element[] | null {
+    const {
+      assetPrefix,
+      devOnlyCacheBusterQueryString,
+      dynamicImports,
+    } = this.context
+    const cssFiles = files.allFiles.filter((f) => f.endsWith('.css'))
+    const sharedFiles: Set<string> = new Set(files.sharedFiles)
+
+    // Unmanaged files are CSS files that will be handled directly by the
+    // webpack runtime (`mini-css-extract-plugin`).
+    let unmangedFiles: Set<string> = new Set([])
+    let dynamicCssFiles = dedupe(
+      dynamicImports.filter((f) => f.file.endsWith('.css'))
+    ).map((f) => f.file)
+    if (dynamicCssFiles.length) {
+      const existing = new Set(cssFiles)
+      dynamicCssFiles = dynamicCssFiles.filter(
+        (f) => !(existing.has(f) || sharedFiles.has(f))
+      )
+      unmangedFiles = new Set(dynamicCssFiles)
+      cssFiles.push(...dynamicCssFiles)
     }
 
-    return files.map((file: string) => {
-      // Only render .css files here
-      if (!/\.css$/.exec(file)) {
-        return null
+    let cssLinkElements: JSX.Element[] = []
+    cssFiles.forEach((file) => {
+      const isSharedFile = sharedFiles.has(file)
+
+      if (!process.env.__NEXT_OPTIMIZE_CSS) {
+        cssLinkElements.push(
+          <link
+            key={`${file}-preload`}
+            nonce={this.props.nonce}
+            rel="preload"
+            href={`${assetPrefix}/_next/${encodeURI(
+              file
+            )}${devOnlyCacheBusterQueryString}`}
+            as="style"
+            crossOrigin={
+              this.props.crossOrigin || process.env.__NEXT_CROSS_ORIGIN
+            }
+          />
+        )
       }
 
-      return (
+      const isUnmanagedFile = unmangedFiles.has(file)
+      cssLinkElements.push(
         <link
           key={file}
           nonce={this.props.nonce}
           rel="stylesheet"
-          href={`${assetPrefix}/_next/${file}`}
-          crossOrigin={this.props.crossOrigin || process.crossOrigin}
+          href={`${assetPrefix}/_next/${encodeURI(
+            file
+          )}${devOnlyCacheBusterQueryString}`}
+          crossOrigin={
+            this.props.crossOrigin || process.env.__NEXT_CROSS_ORIGIN
+          }
+          data-n-g={isUnmanagedFile ? undefined : isSharedFile ? '' : undefined}
+          data-n-p={isUnmanagedFile ? undefined : isSharedFile ? undefined : ''}
         />
       )
     })
+
+    if (
+      process.env.NODE_ENV !== 'development' &&
+      process.env.__NEXT_OPTIMIZE_FONTS
+    ) {
+      cssLinkElements = this.makeStylesheetInert(
+        cssLinkElements
+      ) as ReactElement[]
+    }
+
+    return cssLinkElements.length === 0 ? null : cssLinkElements
   }
 
   getPreloadDynamicChunks() {
-    const { dynamicImports, assetPrefix } = this.context._documentProps
-    const { _devOnlyInvalidateCacheQueryString } = this.context
+    const {
+      dynamicImports,
+      assetPrefix,
+      devOnlyCacheBusterQueryString,
+    } = this.context
 
     return (
       dedupe(dynamicImports)
-        .map((bundle: any) => {
-          // `dynamicImports` will contain both `.js` and `.module.js` when the
-          // feature is enabled. This clause will filter down to the modern
-          // variants only.
-          if (!bundle.file.endsWith(getOptionalModernScriptVariant('.js'))) {
+        .map((bundle) => {
+          if (!bundle.file.endsWith('.js')) {
             return null
           }
 
@@ -178,12 +248,14 @@ export class Head extends Component<
             <link
               rel="preload"
               key={bundle.file}
-              href={`${assetPrefix}/_next/${
+              href={`${assetPrefix}/_next/${encodeURI(
                 bundle.file
-              }${_devOnlyInvalidateCacheQueryString}`}
+              )}${devOnlyCacheBusterQueryString}`}
               as="script"
               nonce={this.props.nonce}
-              crossOrigin={this.props.crossOrigin || process.crossOrigin}
+              crossOrigin={
+                this.props.crossOrigin || process.env.__NEXT_CROSS_ORIGIN
+              }
             />
           )
         })
@@ -192,35 +264,102 @@ export class Head extends Component<
     )
   }
 
-  getPreloadMainLinks() {
-    const { assetPrefix, files } = this.context._documentProps
-    if (!files || files.length === 0) {
-      return null
-    }
-    const { _devOnlyInvalidateCacheQueryString } = this.context
+  getPreloadMainLinks(files: DocumentFiles): JSX.Element[] | null {
+    const {
+      assetPrefix,
+      devOnlyCacheBusterQueryString,
+      scriptLoader,
+    } = this.context
+    const preloadFiles = files.allFiles.filter((file: string) => {
+      return file.endsWith('.js')
+    })
 
-    return files
-      .map((file: string) => {
-        // `dynamicImports` will contain both `.js` and `.module.js` when the
-        // feature is enabled. This clause will filter down to the modern
-        // variants only.
-        // This also filters out non-JS assets.
-        if (!file.endsWith(getOptionalModernScriptVariant('.js'))) {
-          return null
+    return [
+      ...(scriptLoader.eager || []).map((file) => (
+        <link
+          key={file.src}
+          nonce={this.props.nonce}
+          rel="preload"
+          href={file.src}
+          as="script"
+          crossOrigin={
+            this.props.crossOrigin || process.env.__NEXT_CROSS_ORIGIN
+          }
+        />
+      )),
+      ...preloadFiles.map((file: string) => (
+        <link
+          key={file}
+          nonce={this.props.nonce}
+          rel="preload"
+          href={`${assetPrefix}/_next/${encodeURI(
+            file
+          )}${devOnlyCacheBusterQueryString}`}
+          as="script"
+          crossOrigin={
+            this.props.crossOrigin || process.env.__NEXT_CROSS_ORIGIN
+          }
+        />
+      )),
+      ...(scriptLoader.defer || []).map((file: string) => (
+        <link
+          key={file}
+          nonce={this.props.nonce}
+          rel="preload"
+          href={file}
+          as="script"
+          crossOrigin={
+            this.props.crossOrigin || process.env.__NEXT_CROSS_ORIGIN
+          }
+        />
+      )),
+    ]
+  }
+
+  handleDocumentScriptLoaderItems(children: React.ReactNode): ReactNode[] {
+    const { scriptLoader } = this.context
+    const scriptLoaderItems: ScriptLoaderProps[] = []
+    const filteredChildren: ReactNode[] = []
+
+    React.Children.forEach(children, (child: any) => {
+      if (child.type === Script) {
+        if (child.props.strategy === 'eager') {
+          scriptLoader.eager = (scriptLoader.eager || []).concat([
+            {
+              ...child.props,
+            },
+          ])
+          return
+        } else if (['lazy', 'defer'].includes(child.props.strategy)) {
+          scriptLoaderItems.push(child.props)
+          return
         }
+      }
 
-        return (
-          <link
-            key={file}
-            nonce={this.props.nonce}
-            rel="preload"
-            href={`${assetPrefix}/_next/${file}${_devOnlyInvalidateCacheQueryString}`}
-            as="script"
-            crossOrigin={this.props.crossOrigin || process.crossOrigin}
-          />
-        )
-      })
-      .filter(Boolean)
+      filteredChildren.push(child)
+    })
+
+    this.context.__NEXT_DATA__.scriptLoader = scriptLoaderItems
+
+    return filteredChildren
+  }
+
+  makeStylesheetInert(node: ReactNode): ReactNode[] {
+    return React.Children.map(node, (c: any) => {
+      if (
+        c.type === 'link' &&
+        c.props['href'] &&
+        OPTIMIZED_FONT_PROVIDERS.some((url) => c.props['href'].startsWith(url))
+      ) {
+        const newProps = { ...(c.props || {}) }
+        newProps['data-href'] = newProps['href']
+        newProps['href'] = undefined
+        return React.cloneElement(c, newProps)
+      } else if (c.props && c.props['children']) {
+        c.props['children'] = this.makeStylesheetInert(c.props['children'])
+      }
+      return c
+    })
   }
 
   render() {
@@ -228,82 +367,122 @@ export class Head extends Component<
       styles,
       ampPath,
       inAmpMode,
-      assetPrefix,
       hybridAmp,
       canonicalBase,
       __NEXT_DATA__,
       dangerousAsPath,
-    } = this.context._documentProps
-    const { _devOnlyInvalidateCacheQueryString } = this.context
-    const { page, buildId, dynamicBuildId } = __NEXT_DATA__
+      headTags,
+      unstable_runtimeJS,
+      unstable_JsPreload,
+    } = this.context
+    const disableRuntimeJS = unstable_runtimeJS === false
+    const disableJsPreload = unstable_JsPreload === false
 
-    let { head } = this.context._documentProps
-    let children = this.props.children
+    this.context.docComponentsRendered.Head = true
+
+    let { head } = this.context
+    let cssPreloads: Array<JSX.Element> = []
+    let otherHeadElements: Array<JSX.Element> = []
+    if (head) {
+      head.forEach((c) => {
+        if (
+          c &&
+          c.type === 'link' &&
+          c.props['rel'] === 'preload' &&
+          c.props['as'] === 'style'
+        ) {
+          cssPreloads.push(c)
+        } else {
+          c && otherHeadElements.push(c)
+        }
+      })
+      head = cssPreloads.concat(otherHeadElements)
+    }
+    let children = React.Children.toArray(this.props.children).filter(Boolean)
     // show a warning if Head contains <title> (only in development)
     if (process.env.NODE_ENV !== 'production') {
       children = React.Children.map(children, (child: any) => {
-        const isReactHelmet =
-          child && child.props && child.props['data-react-helmet']
-        if (child && child.type === 'title' && !isReactHelmet) {
-          console.warn(
-            "Warning: <title> should not be used in _document.js's <Head>. https://err.sh/next.js/no-document-title"
-          )
+        const isReactHelmet = child?.props?.['data-react-helmet']
+        if (!isReactHelmet) {
+          if (child?.type === 'title') {
+            console.warn(
+              "Warning: <title> should not be used in _document.js's <Head>. https://nextjs.org/docs/messages/no-document-title"
+            )
+          } else if (
+            child?.type === 'meta' &&
+            child?.props?.name === 'viewport'
+          ) {
+            console.warn(
+              "Warning: viewport meta tags should not be used in _document.js's <Head>. https://nextjs.org/docs/messages/no-document-viewport-meta"
+            )
+          }
         }
         return child
       })
       if (this.props.crossOrigin)
         console.warn(
-          'Warning: `Head` attribute `crossOrigin` is deprecated. https://err.sh/next.js/doc-crossorigin-deprecated'
+          'Warning: `Head` attribute `crossOrigin` is deprecated. https://nextjs.org/docs/messages/doc-crossorigin-deprecated'
         )
+    }
+
+    if (
+      process.env.NODE_ENV !== 'development' &&
+      process.env.__NEXT_OPTIMIZE_FONTS &&
+      !inAmpMode
+    ) {
+      children = this.makeStylesheetInert(children)
+    }
+
+    if (process.env.__NEXT_SCRIPT_LOADER) {
+      children = this.handleDocumentScriptLoaderItems(children)
     }
 
     let hasAmphtmlRel = false
     let hasCanonicalRel = false
 
     // show warning and remove conflicting amp head tags
-    head = !inAmpMode
-      ? head
-      : React.Children.map(head || [], child => {
-          if (!child) return child
-          const { type, props } = child
-          let badProp: string = ''
+    head = React.Children.map(head || [], (child) => {
+      if (!child) return child
+      const { type, props } = child
+      if (inAmpMode) {
+        let badProp: string = ''
 
-          if (type === 'meta' && props.name === 'viewport') {
-            badProp = 'name="viewport"'
-          } else if (type === 'link' && props.rel === 'canonical') {
-            hasCanonicalRel = true
-          } else if (type === 'link' && props.rel === 'amphtml') {
-            hasAmphtmlRel = true
-          } else if (type === 'script') {
-            // only block if
-            // 1. it has a src and isn't pointing to ampproject's CDN
-            // 2. it is using dangerouslySetInnerHTML without a type or
-            // a type of text/javascript
-            if (
-              (props.src && props.src.indexOf('ampproject') < -1) ||
-              (props.dangerouslySetInnerHTML &&
-                (!props.type || props.type === 'text/javascript'))
-            ) {
-              badProp = '<script'
-              Object.keys(props).forEach(prop => {
-                badProp += ` ${prop}="${props[prop]}"`
-              })
-              badProp += '/>'
-            }
+        if (type === 'meta' && props.name === 'viewport') {
+          badProp = 'name="viewport"'
+        } else if (type === 'link' && props.rel === 'canonical') {
+          hasCanonicalRel = true
+        } else if (type === 'script') {
+          // only block if
+          // 1. it has a src and isn't pointing to ampproject's CDN
+          // 2. it is using dangerouslySetInnerHTML without a type or
+          // a type of text/javascript
+          if (
+            (props.src && props.src.indexOf('ampproject') < -1) ||
+            (props.dangerouslySetInnerHTML &&
+              (!props.type || props.type === 'text/javascript'))
+          ) {
+            badProp = '<script'
+            Object.keys(props).forEach((prop) => {
+              badProp += ` ${prop}="${props[prop]}"`
+            })
+            badProp += '/>'
           }
+        }
 
-          if (badProp) {
-            console.warn(
-              `Found conflicting amp tag "${
-                child.type
-              }" with conflicting prop ${badProp} in ${
-                __NEXT_DATA__.page
-              }. https://err.sh/next.js/conflicting-amp-tag`
-            )
-            return null
-          }
-          return child
-        })
+        if (badProp) {
+          console.warn(
+            `Found conflicting amp tag "${child.type}" with conflicting prop ${badProp} in ${__NEXT_DATA__.page}. https://nextjs.org/docs/messages/conflicting-amp-tag`
+          )
+          return null
+        }
+      } else {
+        // non-amp mode
+        if (type === 'link' && props.rel === 'amphtml') {
+          hasAmphtmlRel = true
+        }
+      }
+      return child
+    })
 
     // try to parse styles from fragment for backwards compat
     const curStyles: React.ReactElement[] = Array.isArray(styles)
@@ -318,22 +497,46 @@ export class Head extends Component<
       Array.isArray(styles.props.children)
     ) {
       const hasStyles = (el: React.ReactElement) =>
-        el &&
-        el.props &&
-        el.props.dangerouslySetInnerHTML &&
-        el.props.dangerouslySetInnerHTML.__html
+        el?.props?.dangerouslySetInnerHTML?.__html
       // @ts-ignore Property 'props' does not exist on type ReactElement
-      styles.props.children.map((child: React.ReactElement) => {
+      styles.props.children.forEach((child: React.ReactElement) => {
         if (Array.isArray(child)) {
-          child.map(el => hasStyles(el) && curStyles.push(el))
+          child.forEach((el) => hasStyles(el) && curStyles.push(el))
         } else if (hasStyles(child)) {
           curStyles.push(child)
         }
       })
     }
 
+    const files: DocumentFiles = getDocumentFiles(
+      this.context.buildManifest,
+      this.context.__NEXT_DATA__.page,
+      inAmpMode
+    )
+
     return (
       <head {...this.props}>
+        {this.context.isDevelopment && (
+          <>
+            <style
+              data-next-hide-fouc
+              data-ampdevmode={inAmpMode ? 'true' : undefined}
+              dangerouslySetInnerHTML={{
+                __html: `body{display:none}`,
+              }}
+            />
+            <noscript
+              data-next-hide-fouc
+              data-ampdevmode={inAmpMode ? 'true' : undefined}
+            >
+              <style
+                dangerouslySetInnerHTML={{
+                  __html: `body{display:block}`,
+                }}
+              />
+            </noscript>
+          </>
+        )}
         {children}
         {head}
         <meta
@@ -364,7 +567,7 @@ export class Head extends Component<
                 amp-custom=""
                 dangerouslySetInnerHTML={{
                   __html: curStyles
-                    .map(style => style.props.dangerouslySetInnerHTML.__html)
+                    .map((style) => style.props.dangerouslySetInnerHTML.__html)
                     .join('')
                     .replace(/\/\*# sourceMappingURL=.*\*\//g, '')
                     .replace(/\/\*@ sourceURL=.*?\*\//g, ''),
@@ -396,145 +599,163 @@ export class Head extends Component<
                 href={canonicalBase + getAmpPath(ampPath, dangerousAsPath)}
               />
             )}
-            {page !== '/_error' && (
-              <link
-                rel="preload"
-                href={
-                  assetPrefix +
-                  getOptionalModernScriptVariant(
-                    dynamicBuildId
-                      ? `/_next/static/client/pages${getPageFile(
-                          page,
-                          buildId
-                        )}`
-                      : `/_next/static/${buildId}/pages${getPageFile(page)}`
-                  ) +
-                  _devOnlyInvalidateCacheQueryString
-                }
-                as="script"
-                nonce={this.props.nonce}
-                crossOrigin={this.props.crossOrigin || process.crossOrigin}
-              />
+            {!process.env.__NEXT_OPTIMIZE_CSS && this.getCssLinks(files)}
+            {!process.env.__NEXT_OPTIMIZE_CSS && (
+              <noscript data-n-css={this.props.nonce ?? ''} />
             )}
-            <link
-              rel="preload"
-              href={
-                assetPrefix +
-                getOptionalModernScriptVariant(
-                  dynamicBuildId
-                    ? `/_next/static/client/pages/_app.${buildId}.js`
-                    : `/_next/static/${buildId}/pages/_app.js`
-                ) +
-                _devOnlyInvalidateCacheQueryString
-              }
-              as="script"
-              nonce={this.props.nonce}
-              crossOrigin={this.props.crossOrigin || process.crossOrigin}
-            />
-            {this.getPreloadDynamicChunks()}
-            {this.getPreloadMainLinks()}
-            {this.getCssLinks()}
+            {!disableRuntimeJS &&
+              !disableJsPreload &&
+              this.getPreloadDynamicChunks()}
+            {!disableRuntimeJS &&
+              !disableJsPreload &&
+              this.getPreloadMainLinks(files)}
+            {process.env.__NEXT_OPTIMIZE_CSS && this.getCssLinks(files)}
+            {process.env.__NEXT_OPTIMIZE_CSS && (
+              <noscript data-n-css={this.props.nonce ?? ''} />
+            )}
+            {this.context.isDevelopment && (
+              // this element is used to mount development styles so the
+              // ordering matches production
+              // (by default, style-loader injects at the bottom of <head />)
+              <noscript id="__next_css__DO_NOT_USE__" />
+            )}
             {styles || null}
           </>
         )}
+        {React.createElement(React.Fragment, {}, ...(headTags || []))}
       </head>
     )
   }
 }
 
-export class Main extends Component {
-  static contextTypes = {
-    _documentProps: PropTypes.any,
-    _devOnlyInvalidateCacheQueryString: PropTypes.string,
-  }
+export function Main() {
+  const { inAmpMode, html, docComponentsRendered } = useContext(
+    DocumentComponentContext
+  )
 
-  context!: DocumentComponentContext
+  docComponentsRendered.Main = true
 
-  render() {
-    const { inAmpMode, html } = this.context._documentProps
-    if (inAmpMode) return '__NEXT_AMP_RENDER_TARGET__'
-    return <div id="__next" dangerouslySetInnerHTML={{ __html: html }} />
-  }
+  if (inAmpMode) return <>{AMP_RENDER_TARGET}</>
+  return <div id="__next" dangerouslySetInnerHTML={{ __html: html }} />
 }
 
 export class NextScript extends Component<OriginProps> {
-  static contextTypes = {
-    _documentProps: PropTypes.any,
-    _devOnlyInvalidateCacheQueryString: PropTypes.string,
-  }
+  static contextType = DocumentComponentContext
 
   static propTypes = {
     nonce: PropTypes.string,
     crossOrigin: PropTypes.string,
   }
 
-  context!: DocumentComponentContext
+  context!: React.ContextType<typeof DocumentComponentContext>
 
   // Source: https://gist.github.com/samthor/64b114e4a4f539915a95b91ffd340acc
   static safariNomoduleFix =
     '!function(){var e=document,t=e.createElement("script");if(!("noModule"in t)&&"onbeforeload"in t){var n=!1;e.addEventListener("beforeload",function(e){if(e.target===t)n=!0;else if(!e.target.hasAttribute("nomodule")||!n)return;e.preventDefault()},!0),t.type="module",t.src=".",e.head.appendChild(t),t.remove()}}();'
 
-  getDynamicChunks() {
-    const { dynamicImports, assetPrefix } = this.context._documentProps
-    const { _devOnlyInvalidateCacheQueryString } = this.context
+  getDynamicChunks(files: DocumentFiles) {
+    const {
+      dynamicImports,
+      assetPrefix,
+      isDevelopment,
+      devOnlyCacheBusterQueryString,
+    } = this.context
 
-    return dedupe(dynamicImports).map((bundle: any) => {
-      let modernProps = {}
-      if (process.env.__NEXT_MODERN_BUILD) {
-        modernProps = /\.module\.js$/.test(bundle.file)
-          ? { type: 'module' }
-          : { noModule: true }
-      }
+    return dedupe(dynamicImports).map((bundle) => {
+      if (!bundle.file.endsWith('.js') || files.allFiles.includes(bundle.file))
+        return null
 
       return (
         <script
-          async
+          async={!isDevelopment}
           key={bundle.file}
-          src={`${assetPrefix}/_next/${
+          src={`${assetPrefix}/_next/${encodeURI(
             bundle.file
-          }${_devOnlyInvalidateCacheQueryString}`}
+          )}${devOnlyCacheBusterQueryString}`}
           nonce={this.props.nonce}
-          crossOrigin={this.props.crossOrigin || process.crossOrigin}
-          {...modernProps}
+          crossOrigin={
+            this.props.crossOrigin || process.env.__NEXT_CROSS_ORIGIN
+          }
         />
       )
     })
   }
 
-  getScripts() {
-    const { assetPrefix, files } = this.context._documentProps
-    if (!files || files.length === 0) {
-      return null
-    }
-    const { _devOnlyInvalidateCacheQueryString } = this.context
+  getPreNextScripts() {
+    const { scriptLoader } = this.context
 
-    return files.map((file: string) => {
-      // Only render .js files here
-      if (!/\.js$/.exec(file)) {
-        return null
-      }
+    return (scriptLoader.eager || []).map((file: ScriptLoaderProps) => {
+      const { strategy, ...props } = file
+      return (
+        <script
+          {...props}
+          nonce={this.props.nonce}
+          crossOrigin={
+            this.props.crossOrigin || process.env.__NEXT_CROSS_ORIGIN
+          }
+        />
+      )
+    })
+  }
 
-      let modernProps = {}
-      if (process.env.__NEXT_MODERN_BUILD) {
-        modernProps = /\.module\.js$/.test(file)
-          ? { type: 'module' }
-          : { noModule: true }
-      }
+  getScripts(files: DocumentFiles) {
+    const {
+      assetPrefix,
+      buildManifest,
+      isDevelopment,
+      devOnlyCacheBusterQueryString,
+    } = this.context
 
+    const normalScripts = files.allFiles.filter((file) => file.endsWith('.js'))
+    const lowPriorityScripts = buildManifest.lowPriorityFiles?.filter((file) =>
+      file.endsWith('.js')
+    )
+
+    return [...normalScripts, ...lowPriorityScripts].map((file) => {
       return (
         <script
           key={file}
-          src={`${assetPrefix}/_next/${file}${_devOnlyInvalidateCacheQueryString}`}
+          src={`${assetPrefix}/_next/${encodeURI(
+            file
+          )}${devOnlyCacheBusterQueryString}`}
           nonce={this.props.nonce}
-          async
-          crossOrigin={this.props.crossOrigin || process.crossOrigin}
-          {...modernProps}
+          async={!isDevelopment}
+          crossOrigin={
+            this.props.crossOrigin || process.env.__NEXT_CROSS_ORIGIN
+          }
         />
       )
     })
   }
 
-  static getInlineScriptSource(documentProps: DocumentProps) {
+  getPolyfillScripts() {
+    // polyfills.js has to be rendered as nomodule without async
+    // It also has to be the first script to load
+    const {
+      assetPrefix,
+      buildManifest,
+      devOnlyCacheBusterQueryString,
+    } = this.context
+
+    return buildManifest.polyfillFiles
+      .filter(
+        (polyfill) =>
+          polyfill.endsWith('.js') && !polyfill.endsWith('.module.js')
+      )
+      .map((polyfill) => (
+        <script
+          key={polyfill}
+          nonce={this.props.nonce}
+          crossOrigin={
+            this.props.crossOrigin || process.env.__NEXT_CROSS_ORIGIN
+          }
+          noModule={true}
+          src={`${assetPrefix}/_next/${polyfill}${devOnlyCacheBusterQueryString}`}
+        />
+      ))
+  }
+
+  static getInlineScriptSource(documentProps: Readonly<DocumentProps>): string {
     const { __NEXT_DATA__ } = documentProps
     try {
       const data = JSON.stringify(__NEXT_DATA__)
@@ -542,9 +763,7 @@ export class NextScript extends Component<OriginProps> {
     } catch (err) {
       if (err.message.indexOf('circular structure')) {
         throw new Error(
-          `Circular structure in "getInitialProps" result of page "${
-            __NEXT_DATA__.page
-          }". https://err.sh/zeit/next.js/circular-structure`
+          `Circular structure in "getInitialProps" result of page "${__NEXT_DATA__.page}". https://nextjs.org/docs/messages/circular-structure`
         )
       }
       throw err
@@ -553,191 +772,110 @@ export class NextScript extends Component<OriginProps> {
 
   render() {
     const {
-      staticMarkup,
       assetPrefix,
       inAmpMode,
-      devFiles,
-      __NEXT_DATA__,
-    } = this.context._documentProps
-    const { _devOnlyInvalidateCacheQueryString } = this.context
+      buildManifest,
+      unstable_runtimeJS,
+      docComponentsRendered,
+      devOnlyCacheBusterQueryString,
+    } = this.context
+    const disableRuntimeJS = unstable_runtimeJS === false
+
+    docComponentsRendered.NextScript = true
 
     if (inAmpMode) {
       if (process.env.NODE_ENV === 'production') {
         return null
       }
 
-      const devFiles = [
-        CLIENT_STATIC_FILES_RUNTIME_AMP,
-        CLIENT_STATIC_FILES_RUNTIME_WEBPACK,
+      const ampDevFiles = [
+        ...buildManifest.devFiles,
+        ...buildManifest.polyfillFiles,
+        ...buildManifest.ampDevFiles,
       ]
 
       return (
         <>
-          {staticMarkup ? null : (
+          {disableRuntimeJS ? null : (
             <script
               id="__NEXT_DATA__"
               type="application/json"
               nonce={this.props.nonce}
-              crossOrigin={this.props.crossOrigin || process.crossOrigin}
+              crossOrigin={
+                this.props.crossOrigin || process.env.__NEXT_CROSS_ORIGIN
+              }
               dangerouslySetInnerHTML={{
-                __html: NextScript.getInlineScriptSource(
-                  this.context._documentProps
-                ),
+                __html: NextScript.getInlineScriptSource(this.context),
               }}
-              data-amp-development-mode-only
+              data-ampdevmode
             />
           )}
-          {devFiles
-            ? devFiles.map(file => (
-                <script
-                  key={file}
-                  src={`${assetPrefix}/_next/${file}${_devOnlyInvalidateCacheQueryString}`}
-                  nonce={this.props.nonce}
-                  crossOrigin={this.props.crossOrigin || process.crossOrigin}
-                  data-amp-development-mode-only
-                />
-              ))
-            : null}
+          {ampDevFiles.map((file) => (
+            <script
+              key={file}
+              src={`${assetPrefix}/_next/${file}${devOnlyCacheBusterQueryString}`}
+              nonce={this.props.nonce}
+              crossOrigin={
+                this.props.crossOrigin || process.env.__NEXT_CROSS_ORIGIN
+              }
+              data-ampdevmode
+            />
+          ))}
         </>
       )
     }
 
-    const { page, buildId, dynamicBuildId } = __NEXT_DATA__
-
     if (process.env.NODE_ENV !== 'production') {
       if (this.props.crossOrigin)
         console.warn(
-          'Warning: `NextScript` attribute `crossOrigin` is deprecated. https://err.sh/next.js/doc-crossorigin-deprecated'
+          'Warning: `NextScript` attribute `crossOrigin` is deprecated. https://nextjs.org/docs/messages/doc-crossorigin-deprecated'
         )
     }
 
-    const pageScript = [
-      <script
-        async
-        data-next-page={page}
-        key={page}
-        src={
-          assetPrefix +
-          (dynamicBuildId
-            ? `/_next/static/client/pages${getPageFile(page, buildId)}`
-            : `/_next/static/${buildId}/pages${getPageFile(page)}`) +
-          _devOnlyInvalidateCacheQueryString
-        }
-        nonce={this.props.nonce}
-        crossOrigin={this.props.crossOrigin || process.crossOrigin}
-        {...(process.env.__NEXT_MODERN_BUILD ? { noModule: true } : {})}
-      />,
-      process.env.__NEXT_MODERN_BUILD && (
-        <script
-          async
-          data-next-page={page}
-          key={`${page}-modern`}
-          src={
-            assetPrefix +
-            getOptionalModernScriptVariant(
-              dynamicBuildId
-                ? `/_next/static/client/pages${getPageFile(page, buildId)}`
-                : `/_next/static/${buildId}/pages${getPageFile(page)}`
-            ) +
-            _devOnlyInvalidateCacheQueryString
-          }
-          nonce={this.props.nonce}
-          crossOrigin={this.props.crossOrigin || process.crossOrigin}
-          type="module"
-        />
-      ),
-    ]
-
-    const appScript = [
-      <script
-        async
-        data-next-page="/_app"
-        src={
-          assetPrefix +
-          (dynamicBuildId
-            ? `/_next/static/client/pages/_app.${buildId}.js`
-            : `/_next/static/${buildId}/pages/_app.js`) +
-          _devOnlyInvalidateCacheQueryString
-        }
-        key="_app"
-        nonce={this.props.nonce}
-        crossOrigin={this.props.crossOrigin || process.crossOrigin}
-        {...(process.env.__NEXT_MODERN_BUILD ? { noModule: true } : {})}
-      />,
-      process.env.__NEXT_MODERN_BUILD && (
-        <script
-          async
-          data-next-page="/_app"
-          src={
-            assetPrefix +
-            (dynamicBuildId
-              ? `/_next/static/client/pages/_app.${buildId}.module.js`
-              : `/_next/static/${buildId}/pages/_app.module.js`) +
-            _devOnlyInvalidateCacheQueryString
-          }
-          key="_app-modern"
-          nonce={this.props.nonce}
-          crossOrigin={this.props.crossOrigin || process.crossOrigin}
-          type="module"
-        />
-      ),
-    ]
+    const files: DocumentFiles = getDocumentFiles(
+      this.context.buildManifest,
+      this.context.__NEXT_DATA__.page,
+      inAmpMode
+    )
 
     return (
       <>
-        {devFiles
-          ? devFiles.map(
-              (file: string) =>
-                !file.match(/\.js\.map/) && (
-                  <script
-                    key={file}
-                    src={`${assetPrefix}/_next/${file}${_devOnlyInvalidateCacheQueryString}`}
-                    nonce={this.props.nonce}
-                    crossOrigin={this.props.crossOrigin || process.crossOrigin}
-                  />
-                )
-            )
+        {!disableRuntimeJS && buildManifest.devFiles
+          ? buildManifest.devFiles.map((file: string) => (
+              <script
+                key={file}
+                src={`${assetPrefix}/_next/${encodeURI(
+                  file
+                )}${devOnlyCacheBusterQueryString}`}
+                nonce={this.props.nonce}
+                crossOrigin={
+                  this.props.crossOrigin || process.env.__NEXT_CROSS_ORIGIN
+                }
+              />
+            ))
           : null}
-        {staticMarkup ? null : (
+        {disableRuntimeJS ? null : (
           <script
             id="__NEXT_DATA__"
             type="application/json"
             nonce={this.props.nonce}
-            crossOrigin={this.props.crossOrigin || process.crossOrigin}
+            crossOrigin={
+              this.props.crossOrigin || process.env.__NEXT_CROSS_ORIGIN
+            }
             dangerouslySetInnerHTML={{
-              __html: NextScript.getInlineScriptSource(
-                this.context._documentProps
-              ),
+              __html: NextScript.getInlineScriptSource(this.context),
             }}
           />
         )}
-        {process.env.__NEXT_MODERN_BUILD ? (
-          <script
-            nonce={this.props.nonce}
-            crossOrigin={this.props.crossOrigin || process.crossOrigin}
-            noModule={true}
-            dangerouslySetInnerHTML={{
-              __html: NextScript.safariNomoduleFix,
-            }}
-          />
-        ) : null}
-        {page !== '/_error' && pageScript}
-        {appScript}
-        {staticMarkup ? null : this.getDynamicChunks()}
-        {staticMarkup ? null : this.getScripts()}
+        {!disableRuntimeJS && this.getPolyfillScripts()}
+        {!disableRuntimeJS && this.getPreNextScripts()}
+        {disableRuntimeJS ? null : this.getDynamicChunks(files)}
+        {disableRuntimeJS ? null : this.getScripts(files)}
       </>
     )
   }
 }
 
-function getAmpPath(ampPath: string, asPath: string) {
-  return ampPath ? ampPath : `${asPath}${asPath.includes('?') ? '&' : '?'}amp=1`
-}
-
-function getPageFile(page: string, buildId?: string) {
-  if (page === '/') {
-    return buildId ? `/index.${buildId}.js` : '/index.js'
-  }
-
-  return buildId ? `${page}.${buildId}.js` : `${page}.js`
+function getAmpPath(ampPath: string, asPath: string): string {
+  return ampPath || `${asPath}${asPath.includes('?') ? '&' : '?'}amp=1`
 }

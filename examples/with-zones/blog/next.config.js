@@ -1,4 +1,3 @@
 module.exports = {
-  target: 'serverless',
-  assetPrefix: '/blog'
+  basePath: '/blog',
 }

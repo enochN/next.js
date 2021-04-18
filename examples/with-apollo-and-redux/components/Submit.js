@@ -1,28 +1,61 @@
-import { graphql } from 'react-apollo'
-import gql from 'graphql-tag'
-import { allPosts, allPostsQueryVars } from './PostList'
+import { gql, useMutation } from '@apollo/client'
 
-function Submit ({ createPost }) {
-  function handleSubmit (event) {
+const CREATE_POST_MUTATION = gql`
+  mutation createPost($title: String!, $url: String!) {
+    createPost(title: $title, url: $url) {
+      id
+      title
+      votes
+      url
+      createdAt
+    }
+  }
+`
+
+const Submit = () => {
+  const [createPost, { loading }] = useMutation(CREATE_POST_MUTATION)
+
+  const handleSubmit = (event) => {
     event.preventDefault()
-
     const form = event.target
-
     const formData = new window.FormData(form)
-    createPost(formData.get('title'), formData.get('url'))
-
+    const title = formData.get('title')
+    const url = formData.get('url')
     form.reset()
+
+    createPost({
+      variables: { title, url },
+      update: (cache, { data: { createPost } }) => {
+        cache.modify({
+          fields: {
+            allPosts(existingPosts = []) {
+              const newPostRef = cache.writeFragment({
+                data: createPost,
+                fragment: gql`
+                  fragment NewPost on allPosts {
+                    id
+                    type
+                  }
+                `,
+              })
+              return [newPostRef, ...existingPosts]
+            },
+          },
+        })
+      },
+    })
   }
 
   return (
     <form onSubmit={handleSubmit}>
-      <h1>Apollo: Submit</h1>
-      <input placeholder='title' name='title' type='text' required />
-      <input placeholder='url' name='url' type='url' required />
-      <button type='submit'>Submit</button>
+      <h1>Submit</h1>
+      <input placeholder="title" name="title" type="text" required />
+      <input placeholder="url" name="url" type="url" required />
+      <button type="submit" disabled={loading}>
+        Submit
+      </button>
       <style jsx>{`
         form {
-          border-bottom: 1px solid #ececec;
           padding-bottom: 20px;
           margin-bottom: 20px;
         }
@@ -38,37 +71,4 @@ function Submit ({ createPost }) {
   )
 }
 
-const createPost = gql`
-  mutation createPost($title: String!, $url: String!) {
-    createPost(title: $title, url: $url) {
-      id
-      title
-      votes
-      url
-      createdAt
-    }
-  }
-`
-
-export default graphql(createPost, {
-  props: ({ mutate }) => ({
-    createPost: (title, url) =>
-      mutate({
-        variables: { title, url },
-        update: (proxy, { data: { createPost } }) => {
-          const data = proxy.readQuery({
-            query: allPosts,
-            variables: allPostsQueryVars
-          })
-          proxy.writeQuery({
-            query: allPosts,
-            data: {
-              ...data,
-              allPosts: [createPost, ...data.allPosts]
-            },
-            variables: allPostsQueryVars
-          })
-        }
-      })
-  })
-})(Submit)
+export default Submit

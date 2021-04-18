@@ -1,10 +1,16 @@
 # Example app with [astroturf](https://github.com/4Catalyzer/astroturf)
 
+This example features how to use [astroturf](https://github.com/4Catalyzer/astroturf) as the zero-runtime CSS-in-JS styling solution instead of [styled-jsx](https://github.com/zeit/styled-jsx).
+
+## Deploy your own
+
+Deploy the example using [Vercel](https://vercel.com?utm_source=github&utm_medium=readme&utm_campaign=next-example):
+
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/git/external?repository-url=https://github.com/vercel/next.js/tree/canary/examples/with-astroturf&project-name=with-astroturf&repository-name=with-astroturf)
+
 ## How to use
 
-### Using `create-next-app`
-
-Execute [`create-next-app`](https://github.com/segmentio/create-next-app) with [Yarn](https://yarnpkg.com/lang/en/docs/cli/create/) or [npx](https://github.com/zkat/npx#readme) to bootstrap the example:
+Execute [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app) with [npm](https://docs.npmjs.com/cli/init) or [Yarn](https://yarnpkg.com/lang/en/docs/cli/create/) to bootstrap the example:
 
 ```bash
 npx create-next-app --example with-astroturf with-astroturf-app
@@ -12,31 +18,4 @@ npx create-next-app --example with-astroturf with-astroturf-app
 yarn create next-app --example with-astroturf with-astroturf-app
 ```
 
-### Download manually
-
-Download the example:
-
-```bash
-curl https://codeload.github.com/zeit/next.js/tar.gz/canary | tar -xz --strip=2 next.js-canary/examples/with-astroturf
-cd with-astroturf
-```
-
-Install it and run:
-
-```bash
-npm install
-npm run dev
-# or
-yarn
-yarn dev
-```
-
-Deploy it to the cloud with [now](https://zeit.co/now) ([download](https://zeit.co/download))
-
-```bash
-now
-```
-
-## The idea behind the example
-
-This example features how to use [astroturf](https://github.com/4Catalyzer/astroturf) as the zero-runtime CSS-in-JS styling solution instead of [styled-jsx](https://github.com/zeit/styled-jsx).
+Deploy it to the cloud with [Vercel](https://vercel.com/new?utm_source=github&utm_medium=readme&utm_campaign=next-example) ([Documentation](https://nextjs.org/docs/deployment)).

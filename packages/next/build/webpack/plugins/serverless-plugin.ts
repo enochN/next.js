@@ -1,5 +1,5 @@
-import { Compiler } from 'webpack'
-import { connectChunkAndModule } from 'webpack/lib/GraphHelpers'
+import { webpack } from 'next/dist/compiled/webpack/webpack'
+import { isWebpack5, GraphHelpers } from 'next/dist/compiled/webpack/webpack'
 
 /**
  * Makes sure there are no dynamic chunks when the target is serverless
@@ -7,114 +7,41 @@ import { connectChunkAndModule } from 'webpack/lib/GraphHelpers'
  * This is to make sure there is a single render bundle instead of that bundle importing dynamic chunks
  */
 
-const NEXT_REPLACE_BUILD_ID = '__NEXT_REPLACE__BUILD_ID__'
-
-function replaceInBuffer(buffer: Buffer, from: string, to: string) {
-  const target = Buffer.from(from, 'utf8')
-  const replacement = Buffer.from(to, 'utf8')
-
-  function bufferTee(source: Buffer): Buffer {
-    const index = source.indexOf(target)
-    if (index === -1) {
-      // Escape recursion loop
-      return source
-    }
-
-    const b1 = source.slice(0, index)
-    const b2 = source.slice(index + target.length)
-
-    const nextBuffer = bufferTee(b2)
-    return Buffer.concat(
-      [b1, replacement, nextBuffer],
-      index + replacement.length + nextBuffer.length
-    )
-  }
-
-  return bufferTee(buffer)
-}
-
-function interceptFileWrites(
-  compiler: Compiler,
-  contentFn: (input: Buffer) => Buffer
-) {
-  compiler.outputFileSystem = new Proxy(compiler.outputFileSystem, {
-    get(target, propKey) {
-      const orig = (target as any)[propKey]
-      if (propKey !== 'writeFile') {
-        return orig
-      }
-
-      return function(targetPath: string, content: Buffer, ...args: any[]) {
-        return orig.call(target, targetPath, contentFn(content), ...args)
-      }
-    },
-  })
-}
-
 export class ServerlessPlugin {
-  private buildId: string
-  private isServer: boolean
-  private isTrace: boolean
-  private isFlyingShuttle: boolean
+  apply(compiler: webpack.Compiler) {
+    compiler.hooks.compilation.tap('ServerlessPlugin', (compilation) => {
+      const hook = isWebpack5
+        ? compilation.hooks.optimizeChunks
+        : compilation.hooks.optimizeChunksBasic
 
-  constructor(
-    buildId: string,
-    {
-      isServer,
-      isTrace,
-      isFlyingShuttle,
-    }: { isServer: boolean; isTrace: boolean; isFlyingShuttle: boolean }
-  ) {
-    this.buildId = buildId
-    this.isServer = isServer
-    this.isTrace = isTrace
-    this.isFlyingShuttle = isFlyingShuttle
-  }
-
-  apply(compiler: Compiler) {
-    if (!this.isServer) {
-      if (this.isFlyingShuttle) {
-        compiler.hooks.emit.tap('ServerlessPlugin', compilation => {
-          const assetNames = Object.keys(compilation.assets).filter(f =>
-            f.includes(this.buildId)
-          )
-          for (const name of assetNames) {
-            compilation.assets[
-              name
-                .replace(new RegExp(`${this.buildId}[\\/\\\\]`), 'client/')
-                .replace(/[.]js$/, `.${this.buildId}.js`)
-            ] = compilation.assets[name]
+      hook.tap('ServerlessPlugin', (chunks) => {
+        for (const chunk of chunks) {
+          // If chunk is not an entry point skip them
+          if (!chunk.hasEntryModule()) {
+            continue
           }
-        })
-      }
-      return
-    }
 
-    interceptFileWrites(compiler, content =>
-      replaceInBuffer(content, NEXT_REPLACE_BUILD_ID, this.buildId)
-    )
-
-    if (!this.isTrace) {
-      compiler.hooks.compilation.tap('ServerlessPlugin', compilation => {
-        compilation.hooks.optimizeChunksBasic.tap(
-          'ServerlessPlugin',
-          chunks => {
-            chunks.forEach(chunk => {
-              // If chunk is not an entry point skip them
-              if (chunk.hasEntryModule()) {
-                const dynamicChunks = chunk.getAllAsyncChunks()
-                if (dynamicChunks.size !== 0) {
-                  for (const dynamicChunk of dynamicChunks) {
-                    for (const module of dynamicChunk.modulesIterable) {
-                      connectChunkAndModule(chunk, module)
-                    }
-                  }
-                }
+          // Async chunks are usages of import() for example
+          const dynamicChunks = chunk.getAllAsyncChunks()
+          for (const dynamicChunk of dynamicChunks) {
+            if (isWebpack5) {
+              // @ts-ignore TODO: Remove ignore when webpack 5 is stable
+              for (const module of compilation.chunkGraph.getChunkModulesIterable(
+                chunk
+              )) {
+                // Add module back into the entry chunk
+                chunk.addModule(module)
               }
-            })
+              continue
+            }
+
+            for (const module of dynamicChunk.modulesIterable) {
+              // Webpack 4 has separate GraphHelpers
+              GraphHelpers.connectChunkAndModule(chunk, module)
+            }
           }
-        )
+        }
       })
-    }
+    })
   }
 }

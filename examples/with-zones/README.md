@@ -1,10 +1,14 @@
 # Using multiple zones
 
+With Next.js you can use multiple apps as a single app using its [multi-zones feature](https://nextjs.org/docs/advanced-features/multi-zones). This is an example showing how to use it.
+
+- All pages should be unique across zones. For example, the `home` app should not have a `pages/blog/index.js` page.
+- The `home` app is the main app and therefore it includes the rewrites that map to the `blog` app in [next.config.js](home/next.config.js)
+- The `blog` app sets [`basePath`](https://nextjs.org/docs/api-reference/next.config.js/basepath) to `/blog` so that generated pages, Next.js assets and public assets are within the `/blog` subfolder.
+
 ## How to use
 
-### Using `create-next-app`
-
-Execute [`create-next-app`](https://github.com/segmentio/create-next-app) with [Yarn](https://yarnpkg.com/lang/en/docs/cli/create/) or [npx](https://github.com/zkat/npx#readme) to bootstrap the example:
+Execute [`create-next-app`](https://github.com/vercel/next.js/tree/canary/packages/create-next-app) with [npm](https://docs.npmjs.com/cli/init) or [Yarn](https://yarnpkg.com/lang/en/docs/cli/create/) to bootstrap the example:
 
 ```bash
 npx create-next-app --example with-zones with-zones-app
@@ -12,68 +16,55 @@ npx create-next-app --example with-zones with-zones-app
 yarn create next-app --example with-zones with-zones-app
 ```
 
-### Download manually
+With multi zones you have multiple Next.js apps over a single app, therefore every app has its own dependencies and it runs independently.
 
-Download the example:
-
-```bash
-curl https://codeload.github.com/zeit/next.js/tar.gz/canary | tar -xz --strip=2 next.js-canary/examples/with-zones
-cd with-zones
-```
-
-Install it and run:
+To start the `/home` run the following commands from the root directory:
 
 ```bash
-npm install
+cd home
+npm install && npm run dev
 # or
-yarn
+cd home
+yarn && yarn dev
 ```
 
-## The idea behind this example
+The `/home` app should be up and running in [http://localhost:3000](http://localhost:3000)!
 
-With Next.js you can use multiple apps as a single app using it's multi-zones feature.
-This is an example showing how to use it.
-
-In this example, we've two apps: 'home' and 'blog'. We'll start both apps with [Now](https://zeit.co/now):
-We also have a set of builders and routes defined in `now.json`.
+Starting the `/blog` app follows a very similar process. In a new terminal, run the following commands from the root directory :
 
 ```bash
-now dev
+cd blog
+npm install && npm run dev
+# or
+cd blog
+yarn && yarn dev
 ```
 
-Now you can visit http://localhost:3000 and develop for both apps as a single app.
+The `blog` app should be up and running in [http://localhost:4000](http://localhost:4000)!
 
-### Now config
+### Deploy on Vercel
 
-`now.json` allows us to create a single dev server for any builders and routes we add to it, with `now dev` we can easily create a dev server for multiple apps without having to deploy or setup anything else:
+You can deploy this app to the cloud with [Vercel](https://vercel.com?utm_source=github&utm_medium=readme&utm_campaign=next-example) ([Documentation](https://nextjs.org/docs/deployment)).
 
-```json
-{
-  "name": "with-zones",
-  "version": 2,
-  "builds": [
-    { "src": "blog/next.config.js", "use": "@now/next" },
-    { "src": "home/next.config.js", "use": "@now/next" }
-  ],
-  "routes": [
-    { "src": "/blog/_next(.*)", "dest": "blog/_next$1" },
-    { "src": "/blog", "dest": "blog/blog" },
-    { "src": "(.*)", "dest": "home$1" }
-  ]
-}
-```
+#### Deploy Your Local Project
 
-The previous file is based in the [@now/next](https://zeit.co/docs/v2/deployments/official-builders/next-js-now-next/) builder and [Now Routes](https://zeit.co/docs/v2/deployments/routes/) from Now V2.
+To deploy the apps to Vercel, we'll use [monorepos support](https://vercel.com/blog/monorepos) to create a new project for each app.
 
-## Special Notes
+To get started, push the example to GitHub/GitLab/Bitbucket and [import your repo to Vercel](https://vercel.com/new?utm_source=github&utm_medium=readme&utm_campaign=next-example). We're not interested in the root directory, so make sure to select the `blog` directory (do not start with `home`):
 
-- All pages should be unique across zones. A page with the same name should not exist in multiple zones. Otherwise, there'll be unexpected behaviours in client side navigation.
-  - According to the above example, a page named `blog` should not be exist in the `home` zone.
+![Import flow for blog app](docs/import-blog.jpg)
 
-## Production Deployment
-
-We only need to run `now`, the same `now.json` used for development will be used for the deployment:
+Click continue and finish the import process. After that's done copy the domain URL that was assigned to your project, paste it on `home/.env`, and push the change to your repo:
 
 ```bash
-now
+# Replace this URL with the URL of your blog app
+BLOG_URL="https://with-zones-blog.vercel.app"
 ```
+
+Now we'll go over the [import flow](https://vercel.com/new?utm_source=github&utm_medium=readme&utm_campaign=next-example) again using the same repo but this time select the `home` directory instead:
+
+![Import flow for home app](docs/import-home.jpg)
+
+With the `home` app deployed you should now be able to see both apps running under the same domain!
+
+Any future commits to the repo will trigger a deployment to the connected Vercel projects. See the [blog post about monorepos](https://vercel.com/blog/monorepos) to learn more.

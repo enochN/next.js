@@ -1,22 +1,25 @@
-import { PluginObj } from '@babel/core'
-import { NodePath } from '@babel/traverse'
-import * as BabelTypes from '@babel/types'
+import {
+  NodePath,
+  PluginObj,
+  types as BabelTypes,
+} from 'next/dist/compiled/babel/core'
+import jsx from 'next/dist/compiled/babel/plugin-syntax-jsx'
 
-export default function({
+export default function ({
   types: t,
 }: {
   types: typeof BabelTypes
 }): PluginObj<any> {
   return {
-    inherits: require('babel-plugin-syntax-jsx'),
+    inherits: jsx,
     visitor: {
-      JSXElement(path, state) {
+      JSXElement(_path, state) {
         state.set('jsx', true)
       },
 
       // Fragment syntax is still JSX since it compiles to createElement(),
       // but JSXFragment is not a JSXElement
-      JSXFragment(path, state) {
+      JSXFragment(_path, state) {
         state.set('jsx', true)
       },
 
@@ -52,6 +55,8 @@ export default function({
 
               // if the React binding came from a require('react'),
               // make sure that our usage comes after it.
+              let newPath: NodePath<BabelTypes.VariableDeclaration>
+
               if (
                 existingBinding &&
                 t.isVariableDeclarator(existingBinding.path.node) &&
@@ -59,10 +64,18 @@ export default function({
                 t.isIdentifier(existingBinding.path.node.init.callee) &&
                 existingBinding.path.node.init.callee.name === 'require'
               ) {
-                existingBinding.path.parentPath.insertAfter(mapping)
+                ;[newPath] = existingBinding.path.parentPath.insertAfter(
+                  mapping
+                )
               } else {
-                // @ts-ignore
-                path.unshiftContainer('body', mapping)
+                ;[newPath] = path.unshiftContainer('body', mapping)
+              }
+
+              for (const declar of newPath.get('declarations')) {
+                path.scope.registerBinding(
+                  newPath.node.kind,
+                  declar as NodePath<BabelTypes.Node>
+                )
               }
             }
 
@@ -83,8 +96,13 @@ export default function({
                 t.stringLiteral(state.opts.module || 'react')
               )
 
-              // @ts-ignore
-              path.unshiftContainer('body', importSpecifier)
+              const [newPath] = path.unshiftContainer('body', importSpecifier)
+              for (const specifier of newPath.get('specifiers')) {
+                path.scope.registerBinding(
+                  'module',
+                  specifier as NodePath<BabelTypes.Node>
+                )
+              }
             }
           }
         },
